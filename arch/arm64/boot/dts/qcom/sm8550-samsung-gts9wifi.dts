@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
- * Copyright (c) 2024, Your Name <you@example.com>
+ * Copyright (c) 2026, Azkali Manad <a.ffcc7@gmail.com>
  *
  * Device tree for Samsung Galaxy Tab S9 Wi-Fi (SM-X710)
  * Codename: gts9wifi — Qualcomm SM8550 (Snapdragon 8 Gen 2)
  *
- * Derived from:
- *   sm8550-samsung-q5q.dts  (Alexandru Serdeliuk, David Wronek)
- *   sm8550-xiaomi-sheng.dts (map220v)
  */
 
 /dts-v1/;
@@ -26,13 +23,6 @@
 #include "pm8550vs.dtsi"
 #include "pmk8550.dtsi"
 
-/*
- * Memory region cleanup.  Regions deleted here are absent from
- * Samsung's downstream DDR map or reclaimed for Linux use.
- * Pattern taken from sm8550-xiaomi-sheng.dts (same SoC, same problem).
- */
-/delete-node/ &rmtfs_mem;
-/delete-node/ &adspslpi_mem;
 /delete-node/ &xbl_dt_log_merged_mem;
 /delete-node/ &hwfence_shbuf;
 /delete-node/ &hyp_tags_reserved_mem;
@@ -48,43 +38,57 @@
 /delete-node/ &oem_vm_mem;
 /delete-node/ &hyp_ext_tags_mem;
 /delete-node/ &hyp_ext_reserved_mem;
-
-/* Wi-Fi only SKU — no modem DSP */
 /delete-node/ &mpss_dsm_mem;
 /delete-node/ &mpss_mem;
 /delete-node/ &q6_mpss_dtb_mem;
 /delete-node/ &remoteproc_mpss;
+/delete-node/ &adspslpi_mem;
+/delete-node/ &rmtfs_mem;
 
 / {
-	model = "Samsung Galaxy Tab S9 Wi-Fi";
-	compatible = "samsung,gts9wifi", "qcom,sm8550";
+	model = "Samsung GTS9WIFI PROJECT (board-id,04)";
+	compatible = "samsung,gts9wifi", "qcom,sm8550", "qcom,kalama-mtp", "qcom,kalama", "qcom,mtp";
 	chassis-type = "tablet";
-
-	/*
-	 * msm-id covers both SM8550 (0x207/519) and SM8550P (0x218/536), v1.0 and v2.0
-	 * board-id 0x04 confirmed from downstream DTB dump.
-	 */
-	qcom,msm-id = <0x207 0x20000 0x218 0x20000 0x207 0x10000 0x218 0x10000>;
+        qcom,msm-id = <0x218 0x20000 0x207 0x20000 0x207 0x10000 0x218 0x10000>;
 	qcom,board-id = <0x10008 0x04>;
+        dtbo-hw_rev = <0x04>;
+        dtbo-hw_rev_end = <0x20>;
+
 
 	aliases {
-		serial0 = &uart7;
-		serial1 = &uart14;	/* QCA6490 BT HCI */
+		serial0 = &uart7;   /* debug UART (QUP SE7)  */
+		serial1 = &uart14;  /* Bluetooth (QUP SE14)  */
+	};
+
+	/*
+	 * Embedded-DTB path: ABL doesn't patch our blob, so describe a
+	 * conservative 512 MiB slice of DRAM at 0xa0000000–0xc0000000.
+	 * /proc/iomem on stock confirms System RAM here (excluding splash
+	 * region 0xb8000000–0xbab00000 which we mark no-map).
+	 */
+	memory@a0000000 {
+		device_type = "memory";
+		reg = <0x0 0xa0000000 0x0 0x20000000>;
 	};
 
 	chosen {
-		/*
-		 * 256 MB udmabuf limit so libcamera can allocate
-		 * contiguous buffers.  Same workaround as sheng.
-		 */
-		bootargs = "udmabuf.size_limit_mb=256";
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		stdout-path = "serial0:115200n8";
+		bootargs = "earlycon=qcom_geni,0xa9c000,115200 console=ttyMSM0,115200 loglevel=8 clk_ignore_unused pd_ignore_unused udmabuf.size_limit_mb=256";
+
+		framebuffer: framebuffer@b8000000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0xb8000000 0x0 (1600 * 2560 * 4)>;
+			width = <1600>;
+			height = <2560>;
+			stride = <(1600 * 4)>;
+			format = "a8r8g8b8";
+		};
 	};
 
-	/*
-	 * Backlight bias: ±5.8 V switched by TLMM GPIOs.
-	 * Tab S9 uses KTZ8866-class controller, same topology as sheng.
-	 * GPIO numbers are tentative — verify against Tab S9 schematic.
-	 */
 	bl_vddpos_5p8: bl-vddpos-regulator {
 		compatible = "regulator-fixed";
 		regulator-name = "bl_vddpos_5p8";
@@ -119,7 +123,6 @@
 			wakeup-source;
 		};
 
-		/* Book Cover Keyboard lid detection */
 		event-hall-sensor {
 			label = "Hall Effect Sensor";
 			gpios = <&tlmm 107 GPIO_ACTIVE_LOW>;
@@ -130,9 +133,8 @@
 			wakeup-source;
 		};
 
-		/* Wacom S-Pen proximity hall sensor */
 		event-hall-wacom {
-			label = "Hall Effect Sensor (Wacom)";
+			label = "Hall Effect Sensor (Wacom S-Pen)";
 			gpios = <&tlmm 203 GPIO_ACTIVE_LOW>;
 			linux,input-type = <EV_SW>;
 			linux,code = <SW_TABLET_MODE>;
@@ -141,12 +143,6 @@
 		};
 	};
 
-	/*
-	 * USB-C connector topology:
-	 *   pmic-glink <-- HS  <-- DWC3
-	 *              <-- SS  <-- PS5169 redriver <-- QMP PHY
-	 *              <-- SBU <-- FSA4480 mux
-	 */
 	pmic-glink {
 		compatible = "qcom,sm8550-pmic-glink", "qcom,pmic-glink";
 		#address-cells = <1>;
@@ -185,6 +181,15 @@
 		};
 	};
 
+	/*
+	 * Reserved-memory carveouts derived from the stock gts9wifi
+	 * bootloader (BL_X710XXU5CYD9 — xbl_config.elf "Kailua" memory
+	 * map). Only regions the hardware still reads during the
+	 * UEFI→Linux hand-off are kept no-map; ranges freed by
+	 * ExitBootServices (DXE heap, UEFI FD) or migrated out by
+	 * uniLoader stripping the Qualcomm hypervisor (trust_ui_vm,
+	 * oem_vm, hyp_ext, RSRV3) are left available to Linux.
+	 */
 	reserved-memory {
 		xbl_ramdump_mem: xbl-ramdump-region@81200000 {
 			reg = <0 0x81200000 0 0x280000>;
@@ -202,7 +207,46 @@
 		};
 
 		adspslpi_mem: adspslpi-region@9ea00000 {
-			reg = <0 0x9ea00000 0 0x4680000>;
+			reg = <0 0x9ea00000 0 0x4080000>;
+			no-map;
+		};
+
+		/*
+		 * Samsung downstream DPU programs a demura calibration LUT
+		 * here at boot and the display controller keeps scanning it
+		 * until the mainline msm DRM driver reinitialises the
+		 * pipeline. Reserve it so simple-framebuffer hand-off can't
+		 * clobber an in-flight DPU read.
+		 */
+		display_demura_mem: display-demura-region@a2a80000 {
+			reg = <0x0 0xa2a80000 0x0 0x2b00000>;
+			no-map;
+		};
+
+		/* XBL "RSRV2" — purpose undocumented, reserved out of caution. */
+		rsrv2_mem: rsrv2-region@a5580000 {
+			reg = <0x0 0xa5580000 0x0 0xb80000>;
+			no-map;
+		};
+
+		/*
+		 * XBL "DBI Dump" — debug boot-info dump target, mapped as
+		 * MMAP_IO in the bootloader memory map but still falls
+		 * inside the DDR window Linux enumerates.
+		 */
+		dbi_dump_mem: dbi-dump-region@a6100000 {
+			reg = <0x0 0xa6100000 0x0 0xf00000>;
+			no-map;
+		};
+
+		/*
+		 * Bootloader's "Display Reserved" is 43 MiB, covering the
+		 * 1600x2560x4 framebuffer plus Samsung secondary / cursor
+		 * planes. simple-framebuffer only uses the first ~16 MiB
+		 * but the whole region must stay no-map until takeover.
+		 */
+		cont_splash_mem: splash-region@b8000000 {
+			reg = <0x0 0xb8000000 0x0 0x2b00000>;
 			no-map;
 		};
 
@@ -211,7 +255,6 @@
 			reg = <0x0 0xccd00000 0x0 0x280000>;
 			no-map;
 			qcom,client-id = <1>;
-			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
 		};
 
 		hwfence_shbuf: hwfence-shbuf-region@e6440000 {
@@ -219,33 +262,31 @@
 			no-map;
 		};
 
+		ramoops@f0000000 {
+			compatible = "ramoops";
+			reg = <0x0 0xf0000000 0x0 0x200000>;
+			record-size  = <0x40000>;	/* 256 KiB per oops record  */
+			console-size = <0x80000>;	/* 512 KiB kernel console   */
+			pmsg-size    = <0x40000>;	/* 256 KiB userspace pmsg   */
+			/* remaining ~768 KiB is padding / alignment slack   */
+			mem-type = <0>;
+			no-map;
+		};
+
+		/* XBL "NOMAP" carveout at top of low bank, 8 MiB. */
 		llcc_lpi_mem: llcc-lpi-region@ff800000 {
-			reg = <0 0xff800000 0 0x600000>;
+			reg = <0 0xff800000 0 0x800000>;
 			no-map;
 		};
 
-		/*
-		 * Bootloader checks this label exactly to keep display alive.
-		 * 11" AMOLED: 2560x1600 @ 32bpp = 16 MiB
-		 */
-		splash-region@b8000000 {
-			reg = <0x0 0xb8000000 0x0 0x1000000>;
-			no-map;
-		};
-
-		/* CMA pool for camera DMA (libcamera / V4L2) */
 		linux,cma {
 			compatible = "shared-dma-pool";
-			size = <0x0 0x30000000>;
+			size = <0x0 0x20000000>;	/* 512 MiB */
 			reusable;
 			linux,cma-default;
 		};
 	};
 
-	/*
-	 * Audio: quad speakers (2 front + 2 rear) via CS35L41 amps,
-	 * WCD9380 for headset/mic.
-	 */
 	sound {
 		compatible = "qcom,sm8550-sndcard", "qcom,sm8450-sndcard";
 		model = "Samsung-GTS9WiFi";
@@ -306,7 +347,8 @@
 		qcom,micbias3-microvolt = <2750000>;
 		qcom,micbias4-microvolt = <2750000>;
 		qcom,mbhc-buttons-vthreshold-microvolt =
-			<75000 150000 237000 500000 500000 500000 500000 500000>;
+			<75000 150000 237000 500000
+			 500000 500000 500000 500000>;
 		qcom,mbhc-headset-vthreshold-microvolt = <1700000>;
 		qcom,mbhc-headphone-vthreshold-microvolt = <50000>;
 		qcom,rx-device = <&wcd_rx>;
@@ -322,35 +364,43 @@
 		#sound-dai-cells = <1>;
 	};
 
-	/*
-	 * QCA6490 Wi-Fi + BT combo (confirmed from downstream DTB dump).
-	 * NOT WCN7850 — that was inherited incorrectly from sheng.
-	 * PCIe0 carries Wi-Fi; BT uses UART via CNSS framework.
-	 * GPIO assignments confirmed: wlan-en=80, bt-reset=81, sw-ctrl=82, xo-clk=204
-	 */
-	qca6490-pmu {
-		compatible = "qcom,cnss-qca6490";
+	wcn6855_pmu: wlan-pmu {
+		compatible = "qcom,wcn7850-pmu";
 
-		pinctrl-names = "default";
-		pinctrl-0 = <&wlan_en>, <&bt_default>;
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&wlan_en_active>, <&bt_en_state>, <&xo_clk>;
+		pinctrl-1 = <&wlan_en_sleep>;
 
-		wlan-en-gpio    = <&tlmm 80 GPIO_ACTIVE_HIGH>;
-		bt-en-gpio      = <&tlmm 81 GPIO_ACTIVE_HIGH>;
-		bt-sw-ctrl-gpio = <&tlmm 82 GPIO_ACTIVE_HIGH>;
-		xo-clk-gpio     = <&tlmm 204 GPIO_ACTIVE_HIGH>;
+		wlan-enable-gpios = <&tlmm 80 GPIO_ACTIVE_HIGH>;
+		bt-enable-gpios   = <&tlmm 81 GPIO_ACTIVE_HIGH>;
+		swctrl-gpios      = <&tlmm 82 GPIO_ACTIVE_HIGH>;
+		xo-clk-gpios      = <&tlmm 204 GPIO_ACTIVE_HIGH>;
 
-		vdd-supply      = <&vreg_s5g_0p8>;
-		vddio-supply    = <&vreg_l15b_1p8>;
+		vdd-supply        = <&vreg_s2g_0p8>;
+		vddio-supply      = <&vreg_l15b_1p8>;
+		vddaon-supply     = <&vreg_s2g_0p8>;
+		vdddig-supply     = <&vreg_s4e_0p9>;
+		vddrfa1p2-supply  = <&vreg_s4g_1p3>;
+		vddrfa1p8-supply  = <&vreg_s6g_1p8>;
+		vddpcie1p3-supply = <&vreg_s4g_1p3>;
+		vddpcie1p9-supply = <&vreg_s6g_1p8>;
+		vddpmu-supply     = <&vreg_s2g_0p8>;
+		vddpmumx-supply   = <&vreg_s2g_0p8>;
+		vddpmucx-supply   = <&vreg_s4e_0p9>;
+
+		regulators {
+			vreg_pmu_rfa_cmn:  ldo0 { regulator-name = "vreg_pmu_rfa_cmn"; };
+			vreg_pmu_aon_0p59: ldo1 { regulator-name = "vreg_pmu_aon_0p59"; };
+			vreg_pmu_wlcx_0p8: ldo2 { regulator-name = "vreg_pmu_wlcx_0p8"; };
+			vreg_pmu_wlmx_0p85: ldo3 { regulator-name = "vreg_pmu_wlmx_0p85"; };
+			vreg_pmu_rfa_0p8:  ldo5 { regulator-name = "vreg_pmu_rfa_0p8"; };
+			vreg_pmu_rfa_1p2:  ldo6 { regulator-name = "vreg_pmu_rfa_1p2"; };
+			vreg_pmu_rfa_1p8:  ldo7 { regulator-name = "vreg_pmu_rfa_1p8"; };
+			vreg_pmu_pcie_0p9: ldo8 { regulator-name = "vreg_pmu_pcie_0p9"; };
+			vreg_pmu_pcie_1p8: ldo9 { regulator-name = "vreg_pmu_pcie_1p8"; };
+		};
 	};
 };
-
-/* ===================================================================
- * PMIC regulator tree
- *
- * vdd-*-supply lines are REQUIRED.  Without them the regulator core
- * cannot vote for upstream rails and will refuse to enable children.
- * These were entirely absent from the previous DTS revision.
- * =================================================================== */
 
 &apps_rsc {
 	regulators-0 {
@@ -467,8 +517,9 @@
 			regulator-max-microvolt = <1800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 			regulator-allow-set-load;
-			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
-						   RPMH_REGULATOR_MODE_HPM>;
+			regulator-allowed-modes =
+				<RPMH_REGULATOR_MODE_LPM
+				 RPMH_REGULATOR_MODE_HPM>;
 			regulator-always-on;
 		};
 
@@ -622,7 +673,6 @@
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
-		/* Panel VDDIO — wider range per sheng */
 		vreg_s3g_0p7: smps3 {
 			regulator-name = "vreg_s3g_0p7";
 			regulator-min-microvolt = <600000>;
@@ -733,11 +783,6 @@
 	};
 };
 
-/* ===================================================================
- * Peripheral nodes
- * =================================================================== */
-
-/* PM8010 N sub-PMIC not populated on Tab S9 */
 &pm8010_n { status = "disabled"; };
 
 &pm8550b_eusb2_repeater {
@@ -773,7 +818,6 @@
 &pm8550vs_e { status = "okay"; };
 &pm8550vs_g { status = "okay"; };
 
-/* Sleep clock output on GPIO3 — required by WCN7850 PMU */
 &pmk8550_gpios {
 	pmk8550_sleep_clk: sleep-clk-state {
 		pins = "gpio3";
@@ -805,7 +849,6 @@
 &gpi_dma1 { status = "okay"; };
 &gpi_dma2 { status = "okay"; };
 
-/* --- I²C: USB-C SS redriver --- */
 &i2c0 {
 	clock-frequency = <400000>;
 	status = "okay";
@@ -839,7 +882,6 @@
 	};
 };
 
-/* --- I²C hub: backlight + SBU mux --- */
 &i2c_master_hub_0 { status = "okay"; };
 
 &i2c_hub_2 {
@@ -871,7 +913,26 @@
 	};
 };
 
-/* --- I²C: CS35L41 top speakers (TL + TR) --- */
+&i2c_hub_0 {
+	status = "okay";
+
+	touchscreen@5d {
+		compatible = "goodix,gt9916";
+		reg = <0x5d>;
+
+		interrupt-parent = <&tlmm>;
+		interrupts = <25 IRQ_TYPE_EDGE_FALLING>;
+
+		reset-gpios = <&tlmm 24 GPIO_ACTIVE_HIGH>;
+
+		touchscreen-size-x = <1600>;
+		touchscreen-size-y = <2560>;
+
+		avdd-supply  = <&vreg_l2b_3p0>;
+		vddio-supply = <&vreg_l12b_1p8>;
+	};
+};
+
 &i2c5 {
 	clock-frequency = <1000000>;
 	status = "okay";
@@ -882,10 +943,8 @@
 		interrupt-parent = <&tlmm>;
 		interrupts = <98 IRQ_TYPE_LEVEL_LOW>;
 		reset-gpios = <&tlmm 90 GPIO_ACTIVE_HIGH>;
-		#sound-dai-cells = <0>;
+		#sound-dai-cells = <1>;
 		sound-name-prefix = "TL";
-		cirrus,asp-sdout-hiz = <3>;
-		cirrus,bst-ipk-ma = <4000>;
 	};
 
 	cs35l45_tr: cs35l45@31 {
@@ -894,14 +953,11 @@
 		interrupt-parent = <&tlmm>;
 		interrupts = <99 IRQ_TYPE_LEVEL_LOW>;
 		reset-gpios = <&tlmm 90 GPIO_ACTIVE_HIGH>;
-		#sound-dai-cells = <0>;
+		#sound-dai-cells = <1>;
 		sound-name-prefix = "TR";
-		cirrus,asp-sdout-hiz = <3>;
-		cirrus,bst-ipk-ma = <4000>;
 	};
 };
 
-/* --- I²C: CS35L41 bottom speakers (BL + BR) --- */
 &i2c8 {
 	clock-frequency = <1000000>;
 	status = "okay";
@@ -912,10 +968,8 @@
 		interrupt-parent = <&tlmm>;
 		interrupts = <8 IRQ_TYPE_LEVEL_LOW>;
 		reset-gpios = <&tlmm 90 GPIO_ACTIVE_HIGH>;
-		#sound-dai-cells = <0>;
+		#sound-dai-cells = <1>;
 		sound-name-prefix = "BL";
-		cirrus,asp-sdout-hiz = <3>;
-		cirrus,bst-ipk-ma = <4000>;
 	};
 
 	cs35l45_br: cs35l45@31 {
@@ -924,28 +978,22 @@
 		interrupt-parent = <&tlmm>;
 		interrupts = <17 IRQ_TYPE_LEVEL_LOW>;
 		reset-gpios = <&tlmm 90 GPIO_ACTIVE_HIGH>;
-		#sound-dai-cells = <0>;
+		#sound-dai-cells = <1>;
 		sound-name-prefix = "BR";
-		cirrus,asp-sdout-hiz = <3>;
-		cirrus,bst-ipk-ma = <4000>;
 	};
 };
 
-/* --- Display --- */
-&dispcc { status = "disabled"; }; /* until DRM panel driver lands */
-
 &mdss { status = "okay"; };
 
-/*
- * Tab S9 uses single DSI (11" panel vs Pad 6S Pro's 12.4" dual DSI).
- * Panel compatible is a placeholder until the Samsung AMS911R driver exists.
- */
 &mdss_dsi0 {
 	vdda-supply = <&vreg_l3e_1p2>;
 	status = "okay";
 
+	/*
+	 * TODO: write/upstream panel driver for samsung,ams911r10
+	 */
 	display_panel: panel@0 {
-		compatible = "samsung,gts9wifi-ams911r"; /* TODO */
+		compatible = "samsung,gts9wifi-ams911r";
 		reg = <0>;
 		pinctrl-names = "default", "sleep";
 		pinctrl-0 = <&sde_dsi_active>;
@@ -975,14 +1023,12 @@
 
 &mdss_dp0 { status = "okay"; };
 
-/* --- GPU --- */
 &gpu { status = "okay"; };
 
 &gpu_zap_shader {
 	firmware-name = "qcom/sm8550/gts9wifi/a740_zap.mbn";
 };
 
-/* --- IPA --- */
 &ipa {
 	qcom,gsi-loader = "self";
 	memory-region = <&ipa_fw_mem>;
@@ -990,24 +1036,22 @@
 	status = "okay";
 };
 
-/* --- Video processor --- */
 &iris {
 	firmware-name = "qcom/sm8550/gts9wifi/vpu30_4v.mbn";
 	status = "okay";
 };
 
-/* --- PCIe / WCN7850 Wi-Fi --- */
 &pcie0 {
 	wake-gpios  = <&tlmm 96 GPIO_ACTIVE_HIGH>;
 	perst-gpios = <&tlmm 94 GPIO_ACTIVE_LOW>;
-	pinctrl-0 = <&pcie0_default_state>;
+	pinctrl-0   = <&pcie0_default_state>;
 	pinctrl-names = "default";
 	status = "okay";
 };
 
 &pcieport0 {
 	wifi@0 {
-		compatible = "pci17cb,1101"; /* QCA6490 */
+		compatible = "pci17cb,1101";
 		reg = <0x10000 0x0 0x0 0x0 0x0>;
 		vddrfacmn-supply  = <&vreg_pmu_rfa_cmn>;
 		vddaon-supply     = <&vreg_pmu_aon_0p59>;
@@ -1015,7 +1059,8 @@
 		vddwlmx-supply    = <&vreg_pmu_wlmx_0p85>;
 		vddrfa0p8-supply  = <&vreg_pmu_rfa_0p8>;
 		vddrfa1p2-supply  = <&vreg_pmu_rfa_1p2>;
-		vddrfa1p8-supply  = <&vreg_pmu_rfa_1p8>;
+		vddrfa1p7-supply  = <&vreg_s6g_1p8>;
+		vddrfa1p8-supply  = <&vreg_s6g_1p8>;
 		vddpcie0p9-supply = <&vreg_pmu_pcie_0p9>;
 		vddpcie1p8-supply = <&vreg_pmu_pcie_1p8>;
 	};
@@ -1027,7 +1072,6 @@
 	status = "okay";
 };
 
-/* --- Remote processors --- */
 &remoteproc_adsp {
 	firmware-name = "qcom/sm8550/gts9wifi/adsp.mbn",
 			"qcom/sm8550/gts9wifi/adsp_dtb.mbn";
@@ -1039,9 +1083,7 @@
 			"qcom/sm8550/gts9wifi/cdsp_dtb.mbn";
 	status = "okay";
 };
-/* remoteproc_mpss removed via /delete-node/ */
 
-/* --- SoundWire codec paths --- */
 &swr1 {
 	status = "okay";
 	wcd_rx: codec@0,4 {
@@ -1060,111 +1102,161 @@
 	};
 };
 
-/* --- I²C: Touchscreen (Goodix GT9916) --- */
-/*
- * Confirmed from downstream DTB: goodix-berlin@5d, compatible "goodix,gt9916"
- * reset-gpio = GPIO 24 (0x18), irq-gpio = GPIO 25 (0x19)
- * Panel max-x = 1080 (0x438), max-y = 2400 (0x960) — DSI uncompressed coords
- * NOT Novatek NT36532E (that was copied from sheng incorrectly)
- */
-&i2c_hub_0 {
-	status = "okay";
+&uart7 { status = "okay"; };
 
-	touchscreen@5d {
-		compatible = "goodix,gt9916";
-		reg = <0x5d>;
-
-		interrupt-parent = <&tlmm>;
-		interrupts = <25 IRQ_TYPE_EDGE_FALLING>;
-
-		goodix,reset-gpio = <&tlmm 24 GPIO_ACTIVE_HIGH>;
-		goodix,irq-gpio   = <&tlmm 25 IRQ_TYPE_EDGE_FALLING>;
-		goodix,irq-flags  = <2>;
-
-		goodix,panel-max-x = <1080>;
-		goodix,panel-max-y = <2400>;
-		goodix,panel-max-w = <255>;
-		goodix,panel-max-p = <4096>;
-
-		goodix,firmware-name = "goodix_firmware_i2c.bin";
-		goodix,config-name   = "goodix_cfg_group_i2c.bin";
-		goodix,touch-type    = "primary";
-
-		avdd-supply  = <&vreg_l2b_3p0>;
-		iovdd-supply = <&vreg_l12b_1p8>;
-	};
-};
-
-/* --- UART: BT HCI (QCA6490) --- */
-/*
- * QCA6490 BT uses qcom,qca6490 compatible (not wcn7850-bt).
- * Supply references carried from downstream CNSS framework.
- * bt-reset-gpio = 81, bt-sw-ctrl-gpio = 82 (confirmed from downstream)
- */
 &uart14 {
 	status = "okay";
 
 	bluetooth {
-		compatible = "qcom,qca6490";
+		compatible = "qcom,wcn6855-bt";
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&bt_default>;
 
-		qcom,bt-reset-gpio  = <&tlmm 81 GPIO_ACTIVE_HIGH>;
-		qcom,bt-sw-ctrl-gpio = <&tlmm 82 GPIO_ACTIVE_HIGH>;
+		enable-gpios  = <&tlmm 81 GPIO_ACTIVE_HIGH>;
+		swctrl-gpios  = <&tlmm 82 GPIO_ACTIVE_HIGH>;
+
+		vddaon-supply    = <&vreg_pmu_aon_0p59>;
+		vddbtcmx-supply  = <&vreg_pmu_wlmx_0p85>;
+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
+		vddwlcx-supply   = <&vreg_pmu_wlcx_0p8>;
+		vddwlmx-supply   = <&vreg_pmu_wlmx_0p85>;
 
 		max-speed = <3200000>;
 	};
 };
 
-/* --- TLMM pinctrl --- */
 &tlmm {
 	gpio-reserved-ranges = <36 4>;
 
 	sde_dsi_active: sde-dsi-active-state {
-		pins = "gpio133"; function = "gpio";
-		drive-strength = <8>; bias-disable;
+		pins = "gpio133";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
 	};
+
 	sde_dsi_suspend: sde-dsi-suspend-state {
-		pins = "gpio133"; function = "gpio";
-		drive-strength = <2>; bias-pull-down;
+		pins = "gpio133";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
 	};
+
 	bt_default: bt-default-state {
-		bt-en-pins  { pins = "gpio81"; function = "gpio"; drive-strength = <16>; bias-disable; };
-		sw-ctrl-pins { pins = "gpio82"; function = "gpio"; bias-pull-down; };
+		bt-en-pins {
+			pins = "gpio81";
+			function = "gpio";
+			drive-strength = <16>;
+			bias-disable;
+		};
+		sw-ctrl-pins {
+			pins = "gpio82";
+			function = "gpio";
+			bias-pull-down;
+		};
 	};
-	wlan_en: wlan-en-state {
-		pins = "gpio80"; function = "gpio";
-		drive-strength = <8>; bias-pull-down;
-	};
+
 	hall_sensor_default: hall-sensor-default-state {
-		pins = "gpio107"; function = "gpio";
-		drive-strength = <2>; bias-pull-up;
+		pins = "gpio107";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
 	};
+
 	wcd_default: wcd-reset-n-active-state {
-		pins = "gpio108"; function = "gpio";
-		drive-strength = <16>; bias-disable; output-low;
+		pins = "gpio108";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-disable;
+		output-low;
 	};
+
 	i2s0_default: i2s0-default-state {
-		sck-pins   { pins = "gpio121"; function = "i2s1_sck";   drive-strength = <8>; bias-disable; output-high; };
-		data0-pins { pins = "gpio122"; function = "i2s1_data0"; drive-strength = <8>; bias-disable; };
-		ws-pins    { pins = "gpio123"; function = "i2s1_ws";    drive-strength = <8>; bias-disable; output-high; };
-		data1-pins { pins = "gpio124"; function = "i2s1_data1"; drive-strength = <8>; bias-disable; output-high; };
+		sck-pins {
+			pins = "gpio121";
+			function = "i2s1_sck";
+			drive-strength = <8>;
+			bias-disable;
+			output-high;
+		};
+		data0-pins {
+			pins = "gpio122";
+			function = "i2s1_data0";
+			drive-strength = <8>;
+			bias-disable;
+		};
+		ws-pins {
+			pins = "gpio123";
+			function = "i2s1_ws";
+			drive-strength = <8>;
+			bias-disable;
+			output-high;
+		};
+		data1-pins {
+			pins = "gpio124";
+			function = "i2s1_data1";
+			drive-strength = <8>;
+			bias-disable;
+			output-high;
+		};
 	};
+
 	ps5169_reset_default: ps5169-reset-default-state {
-		pins = "gpio7"; function = "gpio";
-		drive-strength = <2>; bias-pull-up;
+		pins = "gpio7";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+
+	wlan_en_active: wlan-en-active-state {
+		pins = "gpio80";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-pull-up;
+		output-high;
+	};
+
+	wlan_en_sleep: wlan-en-sleep-state {
+		pins = "gpio80";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+		output-low;
+	};
+
+	bt_en_state: bt-en-state {
+		pins = "gpio81";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+		output-low;
+	};
+
+	sw_ctrl: sw-ctrl-state {
+		pins = "gpio82";
+		function = "gpio";
+		bias-pull-down;
+		output-low;
+	};
+
+	xo_clk: xo-clk-state {
+		pins = "gpio204";
+		function = "gpio";
+		bias-disable;
 	};
 };
 
-/* --- UFS --- */
 &ufs_mem_hc {
-	reset-gpios        = <&tlmm 210 GPIO_ACTIVE_LOW>;
-	vcc-supply         = <&vreg_l17b_2p5>;
-	vcc-max-microamp   = <1300000>;
-	vccq-supply        = <&vreg_l1g_1p2>;
-	vccq-max-microamp  = <1200000>;
-	vdd-hba-supply     = <&vreg_l3g_1p2>;
+	reset-gpios       = <&tlmm 210 GPIO_ACTIVE_LOW>;
+	vcc-supply        = <&vreg_l17b_2p5>;
+	vcc-max-microamp  = <1300000>;
+	vccq-supply       = <&vreg_l1g_1p2>;
+	vccq-max-microamp = <1200000>;
+	vdd-hba-supply    = <&vreg_l3g_1p2>;
 	status = "okay";
 };
 
@@ -1174,9 +1266,12 @@
 	status = "okay";
 };
 
-/* --- USB --- */
-&usb_1 { status = "okay"; };
-&usb_1_dwc3_hs { remote-endpoint = <&pmic_glink_hs_in>; };
+&usb_1 {
+	status = "okay";
+	dr_mode = "peripheral";
+	maximum-speed = "high-speed";
+	/delete-property/ usb-role-switch;
+};
 
 &usb_1_hsphy {
 	vdd-supply    = <&vreg_l1e_0p88>;
@@ -1193,6 +1288,14 @@
 
 &usb_dp_qmpphy_out { remote-endpoint = <&redriver_ss_in>; };
 
-/* --- Clocks --- */
 &sleep_clk { clock-frequency = <32764>; };
-&xo_board  { clock-frequency = <76800000>; };
+&xo_board   { clock-frequency = <76800000>; };
+
+&soc {
+	watchdog@17c10000 {
+		compatible = "qcom,apss-wdt-sm8550", "qcom,kpss-wdt";
+		reg = <0x0 0x17c10000 0x0 0x1000>;
+		clocks = <&sleep_clk>;
+		interrupts = <GIC_SPI 0 IRQ_TYPE_EDGE_RISING>;
+	};
+};
