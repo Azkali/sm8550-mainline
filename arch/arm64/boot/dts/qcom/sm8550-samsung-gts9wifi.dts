@@ -61,16 +61,15 @@
 	chassis-type = "tablet";
 
 	/*
-	 * SM8550 (non-P): msm-id 519.
-	 * board-id: placeholder — read from `fastboot getvar board-id`
-	 * or extract from downstream DT.
+	 * msm-id covers both SM8550 (0x207/519) and SM8550P (0x218/536), v1.0 and v2.0
+	 * board-id 0x04 confirmed from downstream DTB dump.
 	 */
-	qcom,msm-id = <QCOM_ID_SM8550 0x10000>;
-	qcom,board-id = <0x10008 0>;
+	qcom,msm-id = <0x207 0x20000 0x218 0x20000 0x207 0x10000 0x218 0x10000>;
+	qcom,board-id = <0x10008 0x04>;
 
 	aliases {
 		serial0 = &uart7;
-		serial1 = &uart14;	/* WCN7850 BT HCI */
+		serial1 = &uart14;	/* QCA6490 BT HCI */
 	};
 
 	chosen {
@@ -114,7 +113,6 @@
 		key-volume-up {
 			label = "Volume Up";
 			linux,code = <KEY_VOLUMEUP>;
-			/* TODO: confirm GPIO against Tab S9 schematic */
 			gpios = <&pm8550_gpios 6 GPIO_ACTIVE_LOW>;
 			debounce-interval = <15>;
 			linux,can-disable;
@@ -124,12 +122,22 @@
 		/* Book Cover Keyboard lid detection */
 		event-hall-sensor {
 			label = "Hall Effect Sensor";
-			gpios = <&tlmm 171 GPIO_ACTIVE_LOW>;
+			gpios = <&tlmm 107 GPIO_ACTIVE_LOW>;
 			linux,input-type = <EV_SW>;
 			linux,code = <SW_LID>;
 			debounce-interval = <15>;
 			linux,can-disable;
 			wakeup-source;
+		};
+
+		/* Wacom S-Pen proximity hall sensor */
+		event-hall-wacom {
+			label = "Hall Effect Sensor (Wacom)";
+			gpios = <&tlmm 203 GPIO_ACTIVE_LOW>;
+			linux,input-type = <EV_SW>;
+			linux,code = <SW_TABLET_MODE>;
+			debounce-interval = <15>;
+			linux,can-disable;
 		};
 	};
 
@@ -259,8 +267,8 @@
 		speaker-dai-link {
 			link-name = "CS35L41 Speaker Playback";
 			cpu    { sound-dai = <&q6apmbedai SECONDARY_MI2S_RX>; };
-			codec  { sound-dai = <&cs35l41_tl>, <&cs35l41_tr>,
-					     <&cs35l41_bl>, <&cs35l41_br>; };
+			codec  { sound-dai = <&cs35l45_tl>, <&cs35l45_tr>,
+					     <&cs35l45_bl>, <&cs35l45_br>; };
 			platform { sound-dai = <&q6apm>; };
 		};
 
@@ -314,34 +322,25 @@
 		#sound-dai-cells = <1>;
 	};
 
-	/* WCN7850 Wi-Fi + BT combo PMU (identical wiring to sheng) */
-	wcn7850-pmu {
-		compatible = "qcom,wcn7850-pmu";
+	/*
+	 * QCA6490 Wi-Fi + BT combo (confirmed from downstream DTB dump).
+	 * NOT WCN7850 — that was inherited incorrectly from sheng.
+	 * PCIe0 carries Wi-Fi; BT uses UART via CNSS framework.
+	 * GPIO assignments confirmed: wlan-en=80, bt-reset=81, sw-ctrl=82, xo-clk=204
+	 */
+	qca6490-pmu {
+		compatible = "qcom,cnss-qca6490";
+
 		pinctrl-names = "default";
-		pinctrl-0 = <&wlan_en>, <&bt_default>, <&pmk8550_sleep_clk>;
+		pinctrl-0 = <&wlan_en>, <&bt_default>;
 
-		wlan-enable-gpios = <&tlmm 80 GPIO_ACTIVE_HIGH>;
-		bt-enable-gpios   = <&tlmm 81 GPIO_ACTIVE_HIGH>;
+		wlan-en-gpio    = <&tlmm 80 GPIO_ACTIVE_HIGH>;
+		bt-en-gpio      = <&tlmm 81 GPIO_ACTIVE_HIGH>;
+		bt-sw-ctrl-gpio = <&tlmm 82 GPIO_ACTIVE_HIGH>;
+		xo-clk-gpio     = <&tlmm 204 GPIO_ACTIVE_HIGH>;
 
-		vdd-supply       = <&vreg_s5g_0p8>;
-		vddio-supply     = <&vreg_l15b_1p8>;
-		vddaon-supply    = <&vreg_s2g_0p8>;
-		vdddig-supply    = <&vreg_s4e_0p9>;
-		vddrfa1p2-supply = <&vreg_s4g_1p3>;
-		vddrfa1p8-supply = <&vreg_s6g_1p8>;
-
-		regulators {
-			vreg_pmu_rfa_cmn:   ldo0 { regulator-name = "vreg_pmu_rfa_cmn"; };
-			vreg_pmu_aon_0p59:  ldo1 { regulator-name = "vreg_pmu_aon_0p59"; };
-			vreg_pmu_wlcx_0p8:  ldo2 { regulator-name = "vreg_pmu_wlcx_0p8"; };
-			vreg_pmu_wlmx_0p85: ldo3 { regulator-name = "vreg_pmu_wlmx_0p85"; };
-			vreg_pmu_btcmx_0p85: ldo4 { regulator-name = "vreg_pmu_btcmx_0p85"; };
-			vreg_pmu_rfa_0p8:   ldo5 { regulator-name = "vreg_pmu_rfa_0p8"; };
-			vreg_pmu_rfa_1p2:   ldo6 { regulator-name = "vreg_pmu_rfa_1p2"; };
-			vreg_pmu_rfa_1p8:   ldo7 { regulator-name = "vreg_pmu_rfa_1p8"; };
-			vreg_pmu_pcie_0p9:  ldo8 { regulator-name = "vreg_pmu_pcie_0p9"; };
-			vreg_pmu_pcie_1p8:  ldo9 { regulator-name = "vreg_pmu_pcie_1p8"; };
-		};
+		vdd-supply      = <&vreg_s5g_0p8>;
+		vddio-supply    = <&vreg_l15b_1p8>;
 	};
 };
 
@@ -877,9 +876,9 @@
 	clock-frequency = <1000000>;
 	status = "okay";
 
-	cs35l41_tl: cs35l41@40 {
-		compatible = "cirrus,cs35l41";
-		reg = <0x40>;
+	cs35l45_tl: cs35l45@30 {
+		compatible = "cirrus,cs35l45";
+		reg = <0x30>;
 		interrupt-parent = <&tlmm>;
 		interrupts = <98 IRQ_TYPE_LEVEL_LOW>;
 		reset-gpios = <&tlmm 90 GPIO_ACTIVE_HIGH>;
@@ -889,9 +888,9 @@
 		cirrus,bst-ipk-ma = <4000>;
 	};
 
-	cs35l41_tr: cs35l41@41 {
-		compatible = "cirrus,cs35l41";
-		reg = <0x41>;
+	cs35l45_tr: cs35l45@31 {
+		compatible = "cirrus,cs35l45";
+		reg = <0x31>;
 		interrupt-parent = <&tlmm>;
 		interrupts = <99 IRQ_TYPE_LEVEL_LOW>;
 		reset-gpios = <&tlmm 90 GPIO_ACTIVE_HIGH>;
@@ -907,9 +906,9 @@
 	clock-frequency = <1000000>;
 	status = "okay";
 
-	cs35l41_bl: cs35l41@40 {
-		compatible = "cirrus,cs35l41";
-		reg = <0x40>;
+	cs35l45_bl: cs35l45@30 {
+		compatible = "cirrus,cs35l45";
+		reg = <0x30>;
 		interrupt-parent = <&tlmm>;
 		interrupts = <8 IRQ_TYPE_LEVEL_LOW>;
 		reset-gpios = <&tlmm 90 GPIO_ACTIVE_HIGH>;
@@ -919,9 +918,9 @@
 		cirrus,bst-ipk-ma = <4000>;
 	};
 
-	cs35l41_br: cs35l41@41 {
-		compatible = "cirrus,cs35l41";
-		reg = <0x41>;
+	cs35l45_br: cs35l45@31 {
+		compatible = "cirrus,cs35l45";
+		reg = <0x31>;
 		interrupt-parent = <&tlmm>;
 		interrupts = <17 IRQ_TYPE_LEVEL_LOW>;
 		reset-gpios = <&tlmm 90 GPIO_ACTIVE_HIGH>;
@@ -954,7 +953,7 @@
 		vddio-supply = <&vreg_s3g_0p7>;
 		avdd-supply  = <&bl_vddpos_5p8>;
 		avee-supply  = <&bl_vddneg_5p8>;
-		reset-gpios  = <&tlmm 133 GPIO_ACTIVE_LOW>;
+		reset-gpios  = <&tlmm 125 GPIO_ACTIVE_LOW>;
 		backlight    = <&backlight>;
 		port {
 			panel_in: endpoint {
@@ -1008,7 +1007,7 @@
 
 &pcieport0 {
 	wifi@0 {
-		compatible = "pci17cb,1107";
+		compatible = "pci17cb,1101"; /* QCA6490 */
 		reg = <0x10000 0x0 0x0 0x0 0x0>;
 		vddrfacmn-supply  = <&vreg_pmu_rfa_cmn>;
 		vddaon-supply     = <&vreg_pmu_aon_0p59>;
@@ -1061,31 +1060,59 @@
 	};
 };
 
-/* --- SPI: Touchscreen --- */
-&spi4 {
+/* --- I²C: Touchscreen (Goodix GT9916) --- */
+/*
+ * Confirmed from downstream DTB: goodix-berlin@5d, compatible "goodix,gt9916"
+ * reset-gpio = GPIO 24 (0x18), irq-gpio = GPIO 25 (0x19)
+ * Panel max-x = 1080 (0x438), max-y = 2400 (0x960) — DSI uncompressed coords
+ * NOT Novatek NT36532E (that was copied from sheng incorrectly)
+ */
+&i2c_hub_0 {
 	status = "okay";
-	touchscreen@0 {
-		compatible = "novatek,NVT-ts-spi";
-		reg = <0>;
-		spi-max-frequency = <19200000>;
-		novatek,irq-gpio = <&tlmm 25 0x2001>;
-		panel = <&display_panel>;
-		firmware-name = "novatek/novatek_nt36532e_fw.bin";
+
+	touchscreen@5d {
+		compatible = "goodix,gt9916";
+		reg = <0x5d>;
+
+		interrupt-parent = <&tlmm>;
+		interrupts = <25 IRQ_TYPE_EDGE_FALLING>;
+
+		goodix,reset-gpio = <&tlmm 24 GPIO_ACTIVE_HIGH>;
+		goodix,irq-gpio   = <&tlmm 25 IRQ_TYPE_EDGE_FALLING>;
+		goodix,irq-flags  = <2>;
+
+		goodix,panel-max-x = <1080>;
+		goodix,panel-max-y = <2400>;
+		goodix,panel-max-w = <255>;
+		goodix,panel-max-p = <4096>;
+
+		goodix,firmware-name = "goodix_firmware_i2c.bin";
+		goodix,config-name   = "goodix_cfg_group_i2c.bin";
+		goodix,touch-type    = "primary";
+
+		avdd-supply  = <&vreg_l2b_3p0>;
+		iovdd-supply = <&vreg_l12b_1p8>;
 	};
 };
 
-/* --- UART: BT HCI --- */
+/* --- UART: BT HCI (QCA6490) --- */
+/*
+ * QCA6490 BT uses qcom,qca6490 compatible (not wcn7850-bt).
+ * Supply references carried from downstream CNSS framework.
+ * bt-reset-gpio = 81, bt-sw-ctrl-gpio = 82 (confirmed from downstream)
+ */
 &uart14 {
 	status = "okay";
+
 	bluetooth {
-		compatible = "qcom,wcn7850-bt";
-		vddrfacmn-supply  = <&vreg_pmu_rfa_cmn>;
-		vddaon-supply     = <&vreg_pmu_aon_0p59>;
-		vddwlcx-supply    = <&vreg_pmu_wlcx_0p8>;
-		vddwlmx-supply    = <&vreg_pmu_wlmx_0p85>;
-		vddrfa0p8-supply  = <&vreg_pmu_rfa_0p8>;
-		vddrfa1p2-supply  = <&vreg_pmu_rfa_1p2>;
-		vddrfa1p8-supply  = <&vreg_pmu_rfa_1p8>;
+		compatible = "qcom,qca6490";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&bt_default>;
+
+		qcom,bt-reset-gpio  = <&tlmm 81 GPIO_ACTIVE_HIGH>;
+		qcom,bt-sw-ctrl-gpio = <&tlmm 82 GPIO_ACTIVE_HIGH>;
+
 		max-speed = <3200000>;
 	};
 };
@@ -1111,7 +1138,7 @@
 		drive-strength = <8>; bias-pull-down;
 	};
 	hall_sensor_default: hall-sensor-default-state {
-		pins = "gpio171"; function = "gpio";
+		pins = "gpio107"; function = "gpio";
 		drive-strength = <2>; bias-pull-up;
 	};
 	wcd_default: wcd-reset-n-active-state {
