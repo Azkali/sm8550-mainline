@@ -278,19 +278,56 @@ u64 cpu_logical_map(unsigned int cpu)
 	return __cpu_logical_map[cpu];
 }
 
+/*
+ * gts9wifi: WDT pet via Gunyah SMC 0x86000007. Sprinkled through setup_arch
+ * because the early arm64 setup runs >30s with no printks on this device,
+ * and our WDT extension caps at ~32s. Each pet resets the bite counter.
+ *
+ * @stage: paints a 32 KiB tile at FB+11MB+stage*32KB. Stage 0..15 fit in
+ * 512 KiB at FB+11MB. Idmap covers FB on this device (head.S stages 7-10
+ * already paint successfully). Cache flush + DSB to push to panel.
+ */
+static __always_inline void gts9_step(unsigned long stage)
+{
+	register unsigned long x0 asm("x0") = 0x86000007UL;
+	unsigned long va = 0xb8000000UL + (11UL << 20) + (stage << 15);
+	volatile u64 *fb = (volatile u64 *)va;
+	unsigned long line;
+	u64 px;
+	int i;
+	asm volatile ("smc #0" : "+r" (x0)
+			       : : "x1", "x2", "x3", "x4", "x5", "x6", "x7",
+			           "x8", "x9", "x10", "x11", "x12", "x13",
+			           "x14", "x15", "x16", "x17", "memory");
+	/* unique-ish color per stage. Add 0x405060 to base so stage 0 isn't
+	 * black/invisible. */
+	px = 0xFF000000ULL | (((stage * 0x224488) + 0x405060) & 0x00FFFFFFULL);
+	px |= px << 32;
+	for (i = 0; i < 0x8000 / 8; i++)
+		fb[i] = px;
+	for (line = va; line < va + 0x8000; line += 64)
+		asm volatile ("dc cvac, %0" :: "r" (line) : "memory");
+	asm volatile ("dsb sy" ::: "memory");
+}
+
 void __init __no_sanitize_address setup_arch(char **cmdline_p)
 {
+	gts9_step(0);
 	setup_initial_init_mm(_text, _etext, _edata, _end);
 
 	*cmdline_p = boot_command_line;
 
+	gts9_step(1);
 	kaslr_init();
 
+	gts9_step(2);
 	early_fixmap_init();
 	early_ioremap_init();
 
+	gts9_step(3);
 	setup_machine_fdt(__fdt_pointer);
 
+	gts9_step(4);
 	/*
 	 * Initialise the static keys early as they may be enabled by the
 	 * cpufeature code and early parameters.
@@ -298,6 +335,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	jump_label_init();
 	parse_early_param();
 
+	gts9_step(5);
 	dynamic_scs_init();
 
 	/*
@@ -319,6 +357,7 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 */
 	cpu_uninstall_idmap();
 
+	gts9_step(6);
 	xen_early_init();
 	efi_init();
 
@@ -329,10 +368,13 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 			   FW_BUG "Booted with MMU enabled!");
 	}
 
+	gts9_step(7);
 	arm64_memblock_init();
 
+	gts9_step(8);
 	paging_init();
 
+	gts9_step(9);
 	acpi_table_upgrade();
 
 	/* Parse the ACPI tables for possible boot-time configuration */
@@ -341,10 +383,13 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	if (acpi_disabled)
 		unflatten_device_tree();
 
+	gts9_step(10);
 	bootmem_init();
 
+	gts9_step(11);
 	kasan_init();
 
+	gts9_step(12);
 	request_standard_resources();
 
 	early_ioremap_reset();

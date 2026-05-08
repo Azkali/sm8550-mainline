@@ -83,8 +83,89 @@
 	 *  x21        primary_entry() .. start_kernel()        FDT pointer passed at boot in x0
 	 */
 SYM_CODE_START(primary_entry)
+	/* gts9wifi: Gunyah hypervisor on Samsung-locked SM8550 owns the
+	 * watchdog. Mu UEFI was petting it via SMC 0x86000007 until
+	 * ExitBootServices(); after handoff to the kernel, nobody pets it
+	 * and Gunyah BITEs ~10s later, cycling the device. Three-step
+	 * survival: try DISABLE (0x86000005, x1=2 — Gunyah may block),
+	 * push BARK/BITE timeouts to max (0x86000008), and PET (0x86000007).
+	 * SMC from EL1 traps to EL2 (Gunyah). x0 holds the FDT pointer
+	 * at entry — preserve it across the calls in x28.
+	 */
+	mov	x28, x0				// stash FDT pointer
+
+	/* WDT disable: 0x86000005, x1=0x2 */
+	mov	x0, #0x0005
+	movk	x0, #0x8600, lsl #16
+	mov	x1, #0x2
+	smc	#0
+
+	/* SET BARK timeout: 0x86000008, x1=0xFFFFE, x2=0xFFFF */
+	mov	x0, #0x0008
+	movk	x0, #0x8600, lsl #16
+	mov	x1, #0xFFFE
+	movk	x1, #0xF, lsl #16
+	mov	x2, #0xFFFF
+	smc	#0
+
+	/* SET BITE timeout: 0x86000008, x1=0xFFFF, x2=0xFFFFF */
+	mov	x0, #0x0008
+	movk	x0, #0x8600, lsl #16
+	mov	x1, #0xFFFF
+	mov	x2, #0xFFFF
+	movk	x2, #0xF, lsl #16
+	smc	#0
+
+	/* PET: 0x86000007 */
+	mov	x0, #0x0007
+	movk	x0, #0x8600, lsl #16
+	smc	#0
+
+	mov	x0, x28				// restore FDT pointer
+
+	/* DIAGNOSTIC: paint framebuffer at 0xb8000000 with solid color.
+	 * If we see this on the panel, ABL→kernel handoff worked.
+	 * MMU/caches may be off here — raw stp in 64B bursts.
+	 */
+	/* FB base = 0xb8000000 */
+	movz	x10, #0xb800, lsl #16
+	/* ARGB8888 pixel: opaque red = 0xFFFF0000.
+	 * Pack two pixels per 64b word: 0xFFFF0000_FFFF0000. */
+	movz	x11, #0x0000, lsl #0
+	movk	x11, #0xffff, lsl #16
+	movk	x11, #0x0000, lsl #32
+	movk	x11, #0xffff, lsl #48
+	mov	x12, x11
+	/* Paint 1 MiB (covers top ~163 lines at 1600*4 bpp). */
+	movz	x13, #0x10, lsl #16
+9:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	9b
+	dsb	sy
+
 	bl	record_mmu_state
 	bl	preserve_boot_args
+
+	/* DIAGNOSTIC stage 2: paint GREEN at FB offset 1MB.
+	 * If visible, we got past record_mmu_state + preserve_boot_args.
+	 * Pack two ARGB pixels 0xFF00FF00 (opaque green) per 64b. */
+	movz	x10, #0xb810, lsl #16
+	movz	x11, #0xff00, lsl #0
+	movk	x11, #0xff00, lsl #16
+	movk	x11, #0xff00, lsl #32
+	movk	x11, #0xff00, lsl #48
+	mov	x12, x11
+	movz	x13, #0x10, lsl #16
+8:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	8b
+	dsb	sy
 
 	adrp	x1, early_init_stack
 	mov	sp, x1
@@ -116,9 +197,43 @@ SYM_CODE_START(primary_entry)
 	adr_l	x2, dcache_clean_poc
 	blr	x2
 
-1:	mov	x0, x19
+1:	/* DIAGNOSTIC stage 3: paint BLUE at FB offset 2MB.
+	 * If visible, idmap creation + dcache flush completed. */
+	movz	x10, #0xb820, lsl #16
+	movz	x11, #0x00ff, lsl #0
+	movk	x11, #0xff00, lsl #16
+	movk	x11, #0x00ff, lsl #32
+	movk	x11, #0xff00, lsl #48
+	mov	x12, x11
+	movz	x13, #0x10, lsl #16
+7:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	7b
+	dsb	sy
+
+	mov	x0, x19
 	bl	init_kernel_el			// w0=cpu_boot_mode
 	mov	x20, x0
+
+	/* DIAG stage 4: paint MAGENTA at FB+3MB. After init_kernel_el.
+	 * MMU still off — physical 0xb8300000 direct. */
+	movz	x10, #0xb830, lsl #16
+	movz	x11, #0xff00, lsl #0
+	movk	x11, #0xffff, lsl #16
+	movk	x11, #0xff00, lsl #32
+	movk	x11, #0xffff, lsl #48
+	mov	x12, x11
+	movz	x13, #0x10, lsl #16
+6:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	6b
+	dsb	sy
 
 	/*
 	 * The following calls CPU setup code, see arch/arm64/mm/proc.S for
@@ -127,6 +242,23 @@ SYM_CODE_START(primary_entry)
 	 * the TCR will have been set.
 	 */
 	bl	__cpu_setup			// initialise processor
+
+	/* DIAG stage 5: paint YELLOW at FB+4MB. After __cpu_setup. */
+	movz	x10, #0xb840, lsl #16
+	movz	x11, #0xff00, lsl #0
+	movk	x11, #0xffff, lsl #16
+	movk	x11, #0xff00, lsl #32
+	movk	x11, #0xffff, lsl #48
+	mov	x12, x11
+	movz	x13, #0x10, lsl #16
+5:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	5b
+	dsb	sy
+
 	b	__primary_switch
 SYM_CODE_END(primary_entry)
 
@@ -218,6 +350,32 @@ SYM_CODE_END(preserve_boot_args)
  *   x0 = __pa(KERNEL_START)
  */
 SYM_FUNC_START_LOCAL(__primary_switched)
+	/* DIAGNOSTIC stage 4: paint MAGENTA at FB+3MB if __primary_switched
+	 * was reached. MMU is on now; FB at PHYS 0xb8000000 is in the
+	 * linear map at __va(0xb8000000). Use a fixed offset = PAGE_OFFSET
+	 * + phys_offset from kimage_voffset is unstable here, so write to
+	 * the physical address directly via a non-cacheable mapping isn't
+	 * possible. Instead use the linear map address. */
+	movz	x10, #0xb830, lsl #16		/* phys = 0xb8300000 */
+	/* PAGE_OFFSET for 48-bit VA: 0xffff_8000_0000_0000 */
+	movz	x16, #0x0000, lsl #0
+	movk	x16, #0x8000, lsl #32
+	movk	x16, #0xffff, lsl #48
+	add	x10, x10, x16			/* virt = PAGE_OFFSET + phys */
+	movz	x11, #0xff00, lsl #0
+	movk	x11, #0xffff, lsl #16
+	movk	x11, #0xff00, lsl #32
+	movk	x11, #0xffff, lsl #48		/* magenta x2 */
+	mov	x12, x11
+	movz	x13, #0x10, lsl #16
+6:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	6b
+	dsb	sy
+
 	adr_l	x4, init_task
 	init_cpu_task x4, x5, x6
 
@@ -457,16 +615,65 @@ SYM_FUNC_END(set_cpu_boot_mode_flag)
  */
 	.section ".idmap.text","a"
 SYM_FUNC_START(__enable_mmu)
+	/* DIAG stage 9: paint LIME at FB+8MB. Inside __enable_mmu, MMU off. */
+	stp	x0, x1, [sp, #-16]!
+	stp	x2, x3, [sp, #-16]!
+	movz	x10, #0xb880, lsl #16
+	movz	x11, #0x0000, lsl #0
+	movk	x11, #0xff7f, lsl #16
+	movk	x11, #0x0000, lsl #32
+	movk	x11, #0xff7f, lsl #48
+	mov	x12, x11
+	movz	x13, #0x10, lsl #16
+9:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	9b
+	dsb	sy
+	ldp	x2, x3, [sp], #16
+	ldp	x0, x1, [sp], #16
+
 	mrs	x3, ID_AA64MMFR0_EL1
 	ubfx	x3, x3, #ID_AA64MMFR0_EL1_TGRAN_SHIFT, 4
 	cmp     x3, #ID_AA64MMFR0_EL1_TGRAN_SUPPORTED_MIN
 	b.lt    __no_granule_support
 	cmp     x3, #ID_AA64MMFR0_EL1_TGRAN_SUPPORTED_MAX
 	b.gt    __no_granule_support
+
+	/* DIAG stage 10: paint PINK at FB+9MB. Granule check passed. */
+	stp	x0, x1, [sp, #-16]!
+	stp	x2, x3, [sp, #-16]!
+	movz	x10, #0xb890, lsl #16
+	movz	x11, #0xc0cb, lsl #0
+	movk	x11, #0xffff, lsl #16
+	movk	x11, #0xc0cb, lsl #32
+	movk	x11, #0xffff, lsl #48
+	mov	x12, x11
+	movz	x13, #0x10, lsl #16
+8:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	8b
+	dsb	sy
+	ldp	x2, x3, [sp], #16
+	ldp	x0, x1, [sp], #16
+
 	phys_to_ttbr x2, x2
 	msr	ttbr0_el1, x2			// load TTBR0
 	load_ttbr1 x1, x1, x3
 
+	/* gts9wifi: if MMU was already on at boot (UEFI handoff), skip
+	 * the full SCTLR_EL1 rewrite — Gunyah on Samsung-locked SM8550
+	 * traps SCTLR.M re-arm. With MMU already on, swapping TTBR0/TTBR1
+	 * is enough; we just need an isb. */
+	cbz	x19, 1f
+	isb
+	ret
+1:
 	set_sctlr_el1	x0
 
 	ret
@@ -506,9 +713,43 @@ SYM_FUNC_START_LOCAL(__no_granule_support)
 SYM_FUNC_END(__no_granule_support)
 
 SYM_FUNC_START_LOCAL(__primary_switch)
+	/* DIAG stage 6: paint CYAN at FB+5MB. Inside __primary_switch, MMU off. */
+	movz	x10, #0xb850, lsl #16
+	movz	x11, #0xffff, lsl #0
+	movk	x11, #0xff00, lsl #16
+	movk	x11, #0xffff, lsl #32
+	movk	x11, #0xff00, lsl #48
+	mov	x12, x11
+	movz	x13, #0x10, lsl #16
+4:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	4b
+	dsb	sy
+
 	adrp	x1, reserved_pg_dir
 	adrp	x2, __pi_init_idmap_pg_dir
 	bl	__enable_mmu
+
+	/* DIAG stage 7: paint ORANGE at FB+6MB. After __enable_mmu — MMU on,
+	 * but idmap is identity for low VA, so physical addr 0xb8600000
+	 * works as virt 0xb8600000 too. */
+	movz	x10, #0xb860, lsl #16
+	movz	x11, #0x00ff, lsl #0
+	movk	x11, #0xffa5, lsl #16
+	movk	x11, #0x00ff, lsl #32
+	movk	x11, #0xffa5, lsl #48
+	mov	x12, x11
+	movz	x13, #0x10, lsl #16
+3:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	3b
+	dsb	sy
 
 	adrp	x1, early_init_stack
 	mov	sp, x1
@@ -517,7 +758,35 @@ SYM_FUNC_START_LOCAL(__primary_switch)
 	mov	x1, x21				// pass the FDT
 	bl	__pi_early_map_kernel		// Map and relocate the kernel
 
+	/* DIAG stage 8: paint WHITE at FB+7MB. After __pi_early_map_kernel. */
+	movz	x10, #0xb870, lsl #16
+	movz	x16, #0x0000, lsl #0
+	movk	x16, #0x8000, lsl #32
+	movk	x16, #0xffff, lsl #48
+	add	x10, x10, x16
+	movz	x11, #0xffff, lsl #0
+	movk	x11, #0xffff, lsl #16
+	movk	x11, #0xffff, lsl #32
+	movk	x11, #0xffff, lsl #48
+	mov	x12, x11
+	movz	x13, #0x10, lsl #16
+2:	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	stp	x11, x12, [x10], #16
+	subs	x13, x13, #8
+	b.ne	2b
+	dsb	sy
+
 	ldr	x8, =__primary_switched
 	adrp	x0, KERNEL_START		// __pa(KERNEL_START)
 	br	x8
 SYM_FUNC_END(__primary_switch)
+
+
+	.section .rodata
+	.balign 4096
+SYM_DATA_START(__embedded_dtb)
+	.incbin "arch/arm64/boot/dts/qcom/sm8550-samsung-gts9wifi.dtb"
+SYM_DATA_END(__embedded_dtb)
+	.previous

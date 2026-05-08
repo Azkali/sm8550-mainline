@@ -1004,6 +1004,55 @@ static void __init print_kernel_cmdline(const char *cmdline)
 		pr_notice("%s%s\n", KERNEL_CMDLINE_PREFIX, cmdline);
 }
 
+/*
+ * gts9wifi: paint stripes at FB+11MB.., FB+12MB.., etc to bisect post-MMU
+ * init progress. Each band is 1 MiB tall (0x21000 8-byte writes ≈ 132 lines).
+ *
+ * We use raw VA = PA (the idmap, which stays installed alongside the linear
+ * map) — same trick head.S stages 7-10 use. The linear map MAY not cover the
+ * EFI framebuffer region (likely flagged nomap), so __phys_to_virt would
+ * fault. Idmap ranges are populated by __pi_early_map_kernel and known to
+ * include the FB on this device since head.S stages 7-10 paint successfully.
+ *
+ * Writes go through cacheable memory; flush each cache line to PoC + DSB.
+ */
+static noinline void gts9_paint_band(unsigned long mib_offset, u64 px)
+{
+	unsigned long va = 0xb8000000UL + (mib_offset << 20);
+	volatile u64 *fb = (volatile u64 *)va;
+	unsigned long line;
+	int i;
+	for (i = 0; i < 0x21000 / 8; i++)
+		fb[i] = px;
+	for (line = va; line < va + 0x21000 * 8; line += 64)
+		asm volatile ("dc cvac, %0" :: "r" (line) : "memory");
+	asm volatile ("dsb sy" ::: "memory");
+}
+
+/* C-stage 2: dark green at FB+11MB — past setup_arch (linear map ready). */
+static __always_inline void gts9_paint_post_setup_arch(void)
+{
+	gts9_paint_band(11, 0xFF008000FF008000ULL);
+}
+
+/* C-stage 3: dark blue at FB+12MB — past mm_init. */
+static __always_inline void gts9_paint_post_mm_init(void)
+{
+	gts9_paint_band(12, 0xFF000080FF000080ULL);
+}
+
+/* C-stage 4: teal at FB+13MB — past rest_init / kernel_init reached. */
+static __always_inline void gts9_paint_rest_init(void)
+{
+	gts9_paint_band(13, 0xFF008080FF008080ULL);
+}
+
+/* C-stage 5: gold at FB+14MB — about to call init from initramfs. */
+static __always_inline void gts9_paint_run_init_process(void)
+{
+	gts9_paint_band(14, 0xFFFFD700FFFFD700ULL);
+}
+
 asmlinkage __visible __init __no_sanitize_address __noreturn __no_stack_protector
 void start_kernel(void)
 {
@@ -1028,6 +1077,7 @@ void start_kernel(void)
 	page_address_init();
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);
+	gts9_paint_post_setup_arch();
 	mm_core_init_early();
 	/* Static keys and static calls are needed by LSMs */
 	jump_label_init();
@@ -1068,6 +1118,7 @@ void start_kernel(void)
 	sort_main_extable();
 	trap_init();
 	mm_core_init();
+	gts9_paint_post_mm_init();
 	maple_tree_init();
 	poking_init();
 	ftrace_init();
@@ -1574,6 +1625,8 @@ static int __ref kernel_init(void *unused)
 {
 	int ret;
 
+	gts9_paint_rest_init();
+
 	/*
 	 * Wait until kthreadd is all set-up.
 	 */
@@ -1634,6 +1687,8 @@ static int __ref kernel_init(void *unused)
 		else
 			return 0;
 	}
+
+	gts9_paint_run_init_process();
 
 	if (!try_to_run_init_process("/sbin/init") ||
 	    !try_to_run_init_process("/etc/init") ||

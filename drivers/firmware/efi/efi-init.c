@@ -230,15 +230,44 @@ static __init void reserve_regions(void)
 	}
 }
 
+/*
+ * gts9wifi: pet Gunyah WDT and paint a 32 KiB tile at FB+11MB+stage*32KB.
+ * Stages 16-31 reserved for efi_init substages (setup_arch uses 0-15).
+ */
+static __always_inline void gts9_efi_step(unsigned long stage)
+{
+	register unsigned long x0 asm("x0") = 0x86000007UL;
+	unsigned long va = 0xb8000000UL + (11UL << 20) + (stage << 15);
+	volatile u64 *fb = (volatile u64 *)va;
+	unsigned long line;
+	u64 px;
+	int i;
+	asm volatile ("smc #0" : "+r" (x0)
+			       : : "x1", "x2", "x3", "x4", "x5", "x6", "x7",
+			           "x8", "x9", "x10", "x11", "x12", "x13",
+			           "x14", "x15", "x16", "x17", "memory");
+	px = 0xFF000000ULL | (((stage * 0x224488) + 0x405060) & 0x00FFFFFFULL);
+	px |= px << 32;
+	for (i = 0; i < 0x8000 / 8; i++)
+		fb[i] = px;
+	for (line = va; line < va + 0x8000; line += 64)
+		asm volatile ("dc cvac, %0" :: "r" (line) : "memory");
+	asm volatile ("dsb sy" ::: "memory");
+}
+
 void __init efi_init(void)
 {
 	struct efi_memory_map_data data;
 	u64 efi_system_table;
 
+	gts9_efi_step(16);
+
 	/* Grab UEFI information placed in FDT by stub */
 	efi_system_table = efi_get_fdt_params(&data);
 	if (!efi_system_table)
 		return;
+
+	gts9_efi_step(17);
 
 	if (efi_memmap_init_early(&data) < 0) {
 		/*
@@ -249,6 +278,8 @@ void __init efi_init(void)
 		panic("Unable to map EFI memory map.\n");
 	}
 
+	gts9_efi_step(18);
+
 	WARN(efi.memmap.desc_version != 1,
 	     "Unexpected EFI_MEMORY_DESCRIPTOR version %ld",
 	      efi.memmap.desc_version);
@@ -258,15 +289,22 @@ void __init efi_init(void)
 		return;
 	}
 
+	gts9_efi_step(19);
+
 	reserve_regions();
 	/*
 	 * For memblock manipulation, the cap should come after the memblock_add().
 	 * And now, memblock is fully populated, it is time to do capping.
 	 */
 	early_init_dt_check_for_usable_mem_range();
+
+	gts9_efi_step(20);
+
 	efi_find_mirror();
 	efi_esrt_init();
 	efi_mokvar_table_init();
+
+	gts9_efi_step(21);
 
 	memblock_reserve(data.phys_map & PAGE_MASK,
 			 PAGE_ALIGN(data.size + (data.phys_map & ~PAGE_MASK)));
@@ -275,4 +313,6 @@ void __init efi_init(void)
 	    IS_ENABLED(CONFIG_SYSFB) ||
 	    IS_ENABLED(CONFIG_EFI_EARLYCON))
 		init_primary_display();
+
+	gts9_efi_step(22);
 }

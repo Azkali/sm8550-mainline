@@ -2420,12 +2420,31 @@ MODULE_PARM_DESC(debug_non_panic_cpus,
 		 "allow messages from non-panic CPUs in panic()");
 #endif
 
+/*
+ * gts9wifi: pet the Gunyah-virtualized watchdog on every printk to survive
+ * the boot window before any pet driver loads. SMC 0x86000007 from EL1
+ * traps to EL2 (Gunyah). Cheap (single instruction). Inline asm avoids
+ * pulling in arm_smccc here.
+ */
+static __always_inline void gts9_wdt_pet(void)
+{
+#ifdef CONFIG_ARM64
+	register unsigned long x0 asm("x0") = 0x86000007UL;
+	asm volatile ("smc #0" : "+r" (x0)
+			       : : "x1", "x2", "x3", "x4", "x5", "x6", "x7",
+			           "x8", "x9", "x10", "x11", "x12", "x13",
+			           "x14", "x15", "x16", "x17", "memory");
+#endif
+}
+
 asmlinkage int vprintk_emit(int facility, int level,
 			    const struct dev_printk_info *dev_info,
 			    const char *fmt, va_list args)
 {
 	struct console_flush_type ft;
 	int printed_len;
+
+	gts9_wdt_pet();
 
 	/* Suppress unimportant messages after panic happens */
 	if (unlikely(suppress_printk))

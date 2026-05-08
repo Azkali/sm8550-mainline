@@ -37,6 +37,14 @@ void __cpuidle cpu_do_idle(void)
  */
 void __cpuidle arch_cpu_idle(void)
 {
+	/* gts9wifi: pet Gunyah-virtualized WDT before idling.
+	 * SMC 0x86000007 from EL1 traps to EL2 (Gunyah).
+	 */
+	register unsigned long x0 asm("x0") = 0x86000007UL;
+	asm volatile ("smc #0" : "+r" (x0)
+			       : : "x1", "x2", "x3", "x4", "x5", "x6", "x7",
+			           "x8", "x9", "x10", "x11", "x12", "x13",
+			           "x14", "x15", "x16", "x17", "memory");
 	/*
 	 * This should do all the clock switching and wait for interrupt
 	 * tricks
